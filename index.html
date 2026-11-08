@@ -1181,17 +1181,154 @@ async function callDeepSeek(config, messages, options = {}) {
   }
 }
 
-function normalizeAiField(field, fallback) {
-  if (!field || typeof field !== "object") return fallback;
-  const score = clamp(Math.round(Number(field.score) || 0));
-  const feedback = typeof field.feedback === "string" && field.feedback.trim()
+function normalizeComparableAnswer(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function isExactReferenceMatch(answer, reference) {
+  const normalizedAnswer = normalizeComparableAnswer(answer);
+  const normalizedReference = normalizeComparableAnswer(reference);
+  return Boolean(normalizedAnswer) && normalizedAnswer === normalizedReference;
+}
+
+function toRubricUnit(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return clamp(number > 1 ? number / 100 : number, 0, 1);
+}
+
+function normalizeRelation(value) {
+  const relation = String(value || "").trim().toLowerCase();
+  const map = {
+    exact: "exact", same: "exact", identical: "exact", equal: "exact", "完全一致": "exact", "一致": "exact",
+    equivalent: "equivalent", synonym: "equivalent", paraphrase: "equivalent", "等价": "equivalent", "同义": "equivalent",
+    partial: "partial", partly: "partial", incomplete: "partial", "部分": "partial",
+    incorrect: "incorrect", wrong: "incorrect", unrelated: "incorrect", opposite: "incorrect", "错误": "incorrect", "不相关": "incorrect",
+    blank: "blank", empty: "blank", missing: "blank", "空白": "blank",
+  };
+  if (map[relation]) return map[relation];
+  if (/exact|identical|完全一致/.test(relation)) return "exact";
+  if (/equivalent|paraphrase|synonym|等价|同义/.test(relation)) return "equivalent";
+  if (/partial|partly|incomplete|部分/.test(relation)) return "partial";
+  if (/incorrect|wrong|unrelated|opposite|错误/.test(relation)) return "incorrect";
+  if (/blank|empty|missing|空白/.test(relation)) return "blank";
+  return null;
+}
+
+function hasMeaningRubric(field) {
+  return Boolean(field) && typeof field === "object" && toRubricUnit(field.coverage) !== null;
+}
+
+function resolveFieldFeedback(field, fallback) {
+  return field && typeof field.feedback === "string" && field.feedback.trim()
     ? field.feedback.trim()
     : fallback.feedback;
-  return {
-    score,
-    correct: typeof field.correct === "boolean" ? field.correct : score >= 70,
-    feedback,
-  };
+}
+
+function normalizeAiField(field, fallback) {
+  if (!field || typeof field !== "object") {
+    return { ...fallback, usedRubric: false };
+  }
+  const feedback = resolveFieldFeedback(field, fallback);
+
+  // Version 2 rubric: coverage, precision, and expression are used to calculate
+  // the score locally. Grammar/expression is intentionally only a small part.
+  if (hasMeaningRubric(field)) {
+    const coverage = toRubricUnit(field.coverage);
+    const precision = toRubricUnit(field.precision) ?? (coverage >= 0.85 ? 0.9 : 0.6);
+    const expression = toRubricUnit(field.expression) ?? 0.75;
+    let relation = normalizeRelation(field.relation);
+    if (!relation) {
+      relation = coverage >= 0.95 && precision >= 0.85
+        ? "equivalent"
+        : coverage >= 0.55
+          ? "partial"
+          : "incorrect";
+    }
+    return {
+      score: null,
+      correct: null,
+      feedback,
+      relation,
+      coverage,
+      precision,
+      expression,
+      usedRubric: true,
+    };
+  }
+
+  // Backwards compatibility with the older numeric-score schema.
+  if (Number.isFinite(Number(field.score))) {
+    return {
+      score: clamp(Math.round(Number(field.score))),
+      correct: typeof field.correct === "boolean" ? field.correct : Number(field.score) >= 70,
+      feedback,
+      usedRubric: false,
+    };
+  }
+
+  return { ...fallback, feedback, usedRubric: false };
+}
+
+function scoreMeaningRubric(aiField) {
+  if (aiField.relation === "blank") return 0;
+  const coverage = clamp(aiField.coverage, 0, 1);
+  const precision = clamp(aiField.precision, 0, 1);
+  const expression = clamp(aiField.expression, 0, 1);
+
+  // Meaning dominates. Grammar/spelling alone can never sink an answer.
+  let score = Math.round(100 * (coverage * 0.7 + precision * 0.25 + expression * 0.05));
+
+  if (aiField.relation === "exact") score = Math.max(score, 98);
+  if (aiField.relation === "equivalent") {
+    if (coverage >= 0.85 && precision >= 0.8) score = Math.max(score, 88);
+    if (coverage >= 0.95 && precision >= 0.9) score = Math.max(score, 92);
+  }
+  if (aiField.relation === "partial") score = Math.min(score, 84);
+  if (aiField.relation === "incorrect") score = Math.min(score, 39);
+
+  return clamp(Math.round(score));
+}
+
+function finalizeMeaningField(fieldName, aiField, fallback, word, answers) {
+  const reference = fieldName === "zh" ? word.zh : word.en;
+  const answer = fieldName === "zh" ? answers.zh : answers.en;
+
+  // Deterministic safety net: identical answers must always be full credit,
+  // regardless of an inconsistent model score.
+  if (isExactReferenceMatch(answer, reference)) {
+    return {
+      score: 100,
+      correct: true,
+      feedback: tr("与参考答案完全一致，判定为完全掌握。", "Exactly matches the reference — full credit."),
+      relation: "exact",
+    };
+  }
+
+  if (aiField?.usedRubric) {
+    const score = scoreMeaningRubric(aiField);
+    return {
+      score,
+      correct: score >= 85,
+      feedback: aiField.feedback || fallback.feedback,
+      relation: aiField.relation,
+    };
+  }
+
+  if (Number.isFinite(aiField?.score)) {
+    return {
+      score: clamp(Math.round(aiField.score)),
+      correct: typeof aiField.correct === "boolean" ? aiField.correct : aiField.score >= 85,
+      feedback: aiField.feedback || fallback.feedback,
+      relation: null,
+    };
+  }
+
+  return fallback;
 }
 
 async function getAiEvaluation(word, answers, config, signal) {
@@ -1210,15 +1347,21 @@ async function getAiEvaluation(word, answers, config, signal) {
   const outputLanguage = currentLanguage() === "en" ? "English" : "简体中文";
   const system = [
     "你是 Aster 词航的资深双语词汇教练。你的唯一任务是批改学生刚刚提交的答案，不替学生作答，也不生成新题。",
-    "请对照参考词卡，逐项评估：词性、中文释义、英文释义。",
+    "请对照参考词卡，逐项评估词性、中文释义、英文释义。三个字段必须独立判断，一个字段答错不得拉低另一个字段。",
+    "",
+    "本次采用【语义优先评分】。不要直接给最终分数，只输出语义证据；最终分数由应用根据覆盖率、准确度、表达质量计算。",
     "评分原则：",
-    "1. 词性：参考词卡列出的词性是应选集合；完全一致才正确。多选或漏选都应扣分。",
-    "2. 中文释义：按语义而非字面匹配。同义表达、近义改写应当接受；漏掉核心义项、添加错误义项要扣分。",
-    "3. 英文释义：理解释义而非逐字匹配。同义表达、paraphrase 应当接受；漏掉核心概念、添加错误信息要扣分。",
-    `4. 每一项 feedback 必须使用${outputLanguage}，保持简洁，指出具体问题或做得好的地方。不能只写“正确/错误”。strengths 和 gaps 也必须使用${outputLanguage}。`,
-    "5. overall 是综合掌握度，按词性 20%、中文 40%、英文 40% 加权。",
-    "严格只输出 JSON，不要 markdown，不要额外文字。格式：",
-    '{"pos":{"score":0,"correct":false,"feedback":""},"zh":{"score":0,"correct":false,"feedback":""},"en":{"score":0,"correct":false,"feedback":""},"overall":0,"strengths":["最多3条"],"gaps":["最多3条"]}',
+    "1. 释义按意思判断，不按字面。同义词、近义改写、不同句型、轻微语法/拼写/用词问题，只要整体意思相同，都属于 equivalent。",
+    "2. coverage：参考释义的必要语义单元被学生表达出来的比例，0–1。先判断参考中的多个表达是“独立义项”还是“同义替代”。用 or、斜杠、逗号并列的同义表达是替代关系，学生答出其中一种即可，不得把其他同义表达当作遗漏。多个真正不同的义项才需要分别覆盖。",
+    "3. precision：学生答案是否没有相反、无关或明显错误的意思，0–1。语法、拼写、用词不标准不影响 precision。",
+    "4. expression：语法、拼写和表达是否规范，0–1。它只占极小权重，语法差不能判成不懂词义。",
+    "5. relation 只能是以下之一：exact（与参考词义完全一致，可原样或同义表述）、equivalent（核心意思完整，存在同义改写或表达瑕疵，但整体语义等价）、partial（只覆盖部分核心意思，或带有重要错误）、incorrect（意思相反/无关/基本没答到）、blank（空白或无意义）。",
+    "6. 重要校准：如果 feedback 认为“核心意思准确、基本到位、意思相近、只是语法/拼写/用词问题”，则 coverage 至少应为 0.90，relation 应为 equivalent，不能因为语法或同义词不同而判低。",
+    "7. 重要校准：如果参考写的是“prejudice or discrimination based on sex”，学生写“have bias on different sexes”，核心意思已到位；应判断为 equivalent，coverage 约 0.95，仅将语法问题体现在 expression 和 feedback 中。",
+    "8. 不要用同义表达的数量来压低分数；不要因为学生没有逐字复述参考而扣分。",
+    `9. 每一项 feedback 使用${outputLanguage}，30–80 字；strengths 与 gaps 也使用${outputLanguage}，只写具体、可操作的内容。`,
+    "10. 严格只输出 JSON，不要 markdown，不要额外文字。格式：",
+    '{"pos":{"correct":true,"feedback":""},"zh":{"relation":"equivalent","coverage":0.95,"precision":1,"expression":0.9,"feedback":""},"en":{"relation":"equivalent","coverage":0.95,"precision":1,"expression":0.6,"feedback":""},"strengths":["最多3条"],"gaps":["最多3条"]}',
   ].join("\n");
 
   const userPrompt = [
@@ -1228,7 +1371,7 @@ async function getAiEvaluation(word, answers, config, signal) {
     "学生答案：",
     JSON.stringify(student),
     "",
-    "请输出 JSON 批改结果。",
+    "请依据“语义优先”规则输出语义证据 JSON。再次强调：释义只要核心意思相近就应得到高 coverage 和 equivalent。",
   ].join("\n");
 
   const content = await callDeepSeek(
@@ -1237,36 +1380,36 @@ async function getAiEvaluation(word, answers, config, signal) {
       { role: "system", content: system },
       { role: "user", content: userPrompt },
     ],
-    { json: true, temperature: 0.1, maxTokens: 1000, signal }
+    { json: true, temperature: 0.1, maxTokens: 1400, signal }
   );
   const parsed = parseAiJson(content);
-  const hasUsableField = ["pos", "zh", "en"].some(
-    (field) => parsed?.[field] && Number.isFinite(Number(parsed[field].score))
+  const hasMeaningEvidence = ["zh", "en"].some(
+    (field) => parsed?.[field] && (hasMeaningRubric(parsed[field]) || Number.isFinite(Number(parsed[field].score)))
   );
-  if (!parsed || typeof parsed !== "object" || !hasUsableField) {
+  if (!parsed || typeof parsed !== "object" || !hasMeaningEvidence) {
     throw new Error(tr("AI 返回的批改格式不完整，请重试。", "AI returned an incomplete review. Try again."));
   }
   return parsed;
 }
 
-function mergeAiEvaluation(raw, local, model) {
-  const posField = normalizeAiField(raw.pos, local.pos);
-  const zhField = normalizeAiField(raw.zh, local.zh);
-  const enField = normalizeAiField(raw.en, local.en);
+function mergeAiEvaluation(raw, local, word, answers, model) {
+  const posField = raw?.pos && typeof raw.pos === "object" ? raw.pos : {};
   const pos = {
     ...local.pos,
     correct: local.pos.correct,
     score: local.pos.score,
-    feedback: posField.feedback || local.pos.feedback,
+    feedback: resolveFieldFeedback(posField, local.pos),
   };
-  const overall = Math.round(pos.score * 0.2 + zhField.score * 0.4 + enField.score * 0.4);
+  const zh = finalizeMeaningField("zh", normalizeAiField(raw?.zh, local.zh), local.zh, word, answers);
+  const en = finalizeMeaningField("en", normalizeAiField(raw?.en, local.en), local.en, word, answers);
+  const overall = Math.round(pos.score * 0.2 + zh.score * 0.4 + en.score * 0.4);
   return {
     pos,
-    zh: zhField,
-    en: enField,
+    zh,
+    en,
     overall,
-    strengths: normalizeStringArray(raw.strengths),
-    gaps: normalizeStringArray(raw.gaps),
+    strengths: normalizeStringArray(raw?.strengths),
+    gaps: normalizeStringArray(raw?.gaps),
     source: "ai",
     model,
   };
@@ -2394,6 +2537,11 @@ function ResultPanel({ word, attempt, currentIndex, total, onNext, onGoInsights 
                 ? tr("已对照词卡完成语义批改。分数是下一步行动的路标，不是终点。", "The card has been reviewed semantically. The score is a signpost for your next move, not a finish line.")
                 : tr("尚未连接 AI，本次使用本地关键词匹配。同义表达可能被漏判，建议在设置中接入 DeepSeek 复核。", "AI is not connected, so this attempt used local keyword matching. Paraphrases can be missed; connect DeepSeek in Settings for a closer review.")}
             </p>
+            {attempt.source === "ai" && (
+              <p className="mt-2 max-w-xl text-[10px] leading-relaxed text-white/40">
+                {tr("语义优先评分：意思覆盖 70% + 准确度 25% + 表达 5%。只要核心意思相近就会得到高分，语法和拼写只作轻微扣分；与参考答案完全一致直接 100 分。", "Meaning-first scoring: 70% meaning coverage + 25% precision + 5% expression. Close semantic matches earn high marks; grammar and spelling only cause a small deduction. Exact matches receive 100.")}
+              </p>
+            )}
             {attempt.aiError && (
               <p className="mt-2 inline-flex max-w-full items-start gap-1.5 rounded-[0.8rem] border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[10px] leading-relaxed text-white/60">
                 <Icon name="alert" className="mt-[1px] h-3 w-3 shrink-0" />
@@ -2708,7 +2856,7 @@ function StudyPage({
     if (aiConfigured) {
       try {
         const raw = await getAiEvaluation(currentWord, answers, settings);
-        evaluation = mergeAiEvaluation(raw, local, settings.model);
+        evaluation = mergeAiEvaluation(raw, local, currentWord, answers, settings.model);
       } catch (error) {
         aiError = error.message;
       }

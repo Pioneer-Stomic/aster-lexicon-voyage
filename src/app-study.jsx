@@ -143,6 +143,11 @@ function ResultPanel({ word, attempt, currentIndex, total, onNext, onGoInsights 
                 ? tr("已对照词卡完成语义批改。分数是下一步行动的路标，不是终点。", "The card has been reviewed semantically. The score is a signpost for your next move, not a finish line.")
                 : tr("尚未连接 AI，本次使用本地关键词匹配。同义表达可能被漏判，建议在设置中接入 DeepSeek 复核。", "AI is not connected, so this attempt used local keyword matching. Paraphrases can be missed; connect DeepSeek in Settings for a closer review.")}
             </p>
+            {attempt.source === "ai" && (
+              <p className="mt-2 max-w-xl text-[10px] leading-relaxed text-white/40">
+                {tr("语义优先评分：意思覆盖 70% + 准确度 25% + 表达 5%。只要核心意思相近就会得到高分，语法和拼写只作轻微扣分；与参考答案完全一致直接 100 分。", "Meaning-first scoring: 70% meaning coverage + 25% precision + 5% expression. Close semantic matches earn high marks; grammar and spelling only cause a small deduction. Exact matches receive 100.")}
+              </p>
+            )}
             {attempt.aiError && (
               <p className="mt-2 inline-flex max-w-full items-start gap-1.5 rounded-[0.8rem] border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[10px] leading-relaxed text-white/60">
                 <Icon name="alert" className="mt-[1px] h-3 w-3 shrink-0" />
@@ -457,7 +462,7 @@ function StudyPage({
     if (aiConfigured) {
       try {
         const raw = await getAiEvaluation(currentWord, answers, settings);
-        evaluation = mergeAiEvaluation(raw, local, settings.model);
+        evaluation = mergeAiEvaluation(raw, local, currentWord, answers, settings.model);
       } catch (error) {
         aiError = error.message;
       }
