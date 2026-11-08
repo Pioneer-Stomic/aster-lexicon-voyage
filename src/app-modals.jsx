@@ -44,7 +44,7 @@ function SettingsModal({ settings, onClose, onSave, onLanguageChange, toast }) {
     onClose();
     toast(nextSettings.apiKey
       ? tr("DeepSeek 接入信息已保存。", "DeepSeek connection settings saved.")
-      : tr("已清除 DeepSeek 接入信息，将使用本地判分。", "DeepSeek settings cleared. Local marking will be used."), "success");
+      : tr("已清除 DeepSeek 接入信息。评分功能已暂停，需重新接入 AI 才能批改。", "DeepSeek settings cleared. Grading is paused until you connect AI again."), "success");
   };
 
   const handleTest = async () => {
@@ -103,7 +103,7 @@ function SettingsModal({ settings, onClose, onSave, onLanguageChange, toast }) {
               {tr("调校你的界面。", "Tune your interface.")}
             </h2>
             <p className="mt-3 max-w-md text-[12px] font-light leading-relaxed text-white/55">
-              {tr("选择界面语言，并按需接入 DeepSeek。密钥只用于你主动触发的词卡解析、答案批改与学习诊断；没有密钥时，本地判分和所有学习功能仍然可用。", "Choose your interface language and connect DeepSeek if you want AI help. The API key is used only for card parsing, answer review, and learning diagnosis that you trigger. Without it, local marking and all study features still work.")}
+              {tr("选择界面语言并接入 DeepSeek。所有作答评分与学习诊断均由 AI 完成，不使用本地替代评分；参考答案严格来自你导入的 Excel。", "Choose your interface language and connect DeepSeek. All answer grading and learning diagnosis is done by AI, with no local fallback scoring. References come strictly from your imported Excel file.")}
             </p>
           </div>
           <button type="button" onClick={onClose} aria-label={tr("关闭设置", "Close settings")} className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white">
@@ -252,7 +252,7 @@ function SettingsModal({ settings, onClose, onSave, onLanguageChange, toast }) {
                   {testState.status === "testing" ? tr("正在测试连接", "Testing connection") : testState.status === "success" ? tr("连接就绪", "Uplink ready") : testState.status === "error" ? tr("连接异常", "Connection issue") : tr("连接状态", "Connection state")}
                 </p>
                 <p className="mt-1 break-words text-[11px] leading-relaxed text-white/55">
-                  {testState.message || (draft.apiKey ? tr("保存后，练习提交时会自动调用 DeepSeek 做语义批改。", "After saving, DeepSeek will review each submitted attempt.") : tr("尚未填写密钥。你仍可导入、练习和查看本地分析。", "No key yet. You can still import, practise, and view local analytics."))}
+                  {testState.message || (draft.apiKey ? tr("保存后，练习提交时会自动调用 DeepSeek 做逐项语义批改。", "After saving, DeepSeek will review each submitted attempt field by field.") : tr("尚未填写密钥。可导入和管理词库，但评分必须接入 AI 后才能使用。", "No key yet. You can still import and manage cards, but grading requires AI."))}
                 </p>
               </div>
             </div>
@@ -596,8 +596,8 @@ function ImportModal({ existingWords, settings, aiConfigured, onClose, onSave, o
                     <p className="text-[12px] text-white/75">{aiConfigured ? tr("AI 词卡增强已就绪", "AI card enhancement ready") : tr("DeepSeek 尚未接入", "DeepSeek is not connected")}</p>
                     <p className="mt-1 max-w-lg text-[10px] leading-relaxed text-white/40">
                       {aiConfigured
-                        ? tr("AI 会规范词性、补全词义边界、生成记忆钩子和标签；原始释义不会被随意改写。", "AI normalizes parts of speech, tightens meaning boundaries, and adds memory hooks and tags. Original definitions are not rewritten casually.")
-                        : tr("不接入 AI 也可以生成词卡。连接后可为每个词补全记忆钩子、标签和难度。", "You can build cards without AI. Connect it to add memory hooks, tags, and difficulty.")}
+                        ? tr("AI 只会补充词性建议、记忆钩子、标签和难度；中文与英文参考答案严格保留为 Excel 原文。", "AI only adds part-of-speech suggestions, memory hooks, tags, and difficulty. Chinese and English references stay exactly as they appear in your Excel file.")
+                        : tr("不接入 AI 也可以生成基础词卡，但所有作答评分必须使用 AI。连接后仅增强词卡元数据，不改写参考答案。", "You can build raw cards without AI, but all answer grading requires AI. Connecting AI enriches metadata only; it never rewrites references.")}
                     </p>
                   </div>
                 </div>
@@ -799,6 +799,7 @@ function sanitizeIncomingCard(card) {
     rawPos: String(card.rawPos || "").trim(),
     en: String(card.en || "").trim(),
     zh: String(card.zh || "").trim(),
+    referenceSource: card.referenceSource === "sample" ? "sample" : "excel",
     memoryTip: String(card.memoryTip || "").trim().slice(0, 160),
     tags: normalizeStringArray(card.tags, 5),
     difficulty: Math.round(clamp(Number(card.difficulty) || 2, 1, 3)),

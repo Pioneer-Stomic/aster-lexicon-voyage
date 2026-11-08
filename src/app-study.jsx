@@ -43,9 +43,20 @@ function PosSelector({ selected, onToggle, disabled }) {
   );
 }
 
-function FieldScoreCard({ field, result, yourAnswer, reference }) {
+function FieldScoreCard({ field, result, yourAnswer, reference, referenceSource, items = [] }) {
   const score = result?.score ?? 0;
   const feedback = result?.feedback || "—";
+  const sourceLabel = referenceSource === "excel"
+    ? tr("Excel 原文", "Excel source")
+    : referenceSource === "sample"
+      ? tr("示例词库", "Sample source")
+      : tr("词卡原文", "Card source");
+  const itemStatusLabel = (status) => status === "covered"
+    ? tr("命中", "Matched")
+    : status === "partial"
+      ? tr("部分", "Partial")
+      : tr("未命中", "Missing");
+  const coveredCount = items.filter((item) => item.status === "covered").length;
   return (
     <div className="flex min-w-0 flex-col rounded-[1.15rem] border border-white/12 bg-white/[0.045] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -62,6 +73,33 @@ function FieldScoreCard({ field, result, yourAnswer, reference }) {
         <Meter value={score} />
       </div>
       <p className="mt-4 whitespace-pre-wrap text-[12px] font-light leading-relaxed text-white/70">{feedback}</p>
+      {items.length > 0 && (
+        <div className="mt-4 rounded-[0.9rem] border border-white/10 bg-black/10 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="mono-label">{tr("逐条对照", "Item-by-item")}</p>
+            <span className="text-[9px] text-white/35">{coveredCount}/{items.length} {tr("命中", "matched")}</span>
+          </div>
+          <div className="mt-2.5 space-y-2">
+            {items.map((item, index) => (
+              <div key={`${field}-item-${index}`} className="flex items-start gap-2">
+                <span className={`mt-[1px] shrink-0 rounded-full border px-1.5 py-0.5 text-[8px] leading-none ${
+                  item.status === "covered"
+                    ? "border-white/30 text-white/75"
+                    : item.status === "partial"
+                      ? "border-white/20 text-white/55"
+                      : "border-white/10 text-white/35"
+                }`}>
+                  {itemStatusLabel(item.status)}
+                </span>
+                <div className="min-w-0">
+                  <p className="break-words text-[10px] leading-relaxed text-white/65">{item.reference}</p>
+                  {item.note && <p className="mt-0.5 break-words text-[9px] leading-relaxed text-white/35">{item.note}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="mt-auto space-y-3 pt-5">
         <div>
           <p className="text-[9px] uppercase tracking-[0.18em] text-white/35">{tr("你的答案", "Your answer")}</p>
@@ -71,7 +109,10 @@ function FieldScoreCard({ field, result, yourAnswer, reference }) {
         </div>
         <div className="h-px bg-white/10" />
         <div>
-          <p className="text-[9px] uppercase tracking-[0.18em] text-white/35">{tr("参考答案", "Reference")}</p>
+          <p className="text-[9px] uppercase tracking-[0.18em] text-white/35">
+            {tr("参考答案", "Reference")}
+            <span className="ml-2 rounded-full border border-white/15 px-1.5 py-0.5 text-[8px] normal-case tracking-normal text-white/40">{sourceLabel}</span>
+          </p>
           <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-white/85">{reference || "—"}</p>
         </div>
       </div>
@@ -116,9 +157,7 @@ function ResultPanel({ word, attempt, currentIndex, total, onNext, onGoInsights 
   }, []);
 
   if (!attempt) return null;
-  const sourceLabel = attempt.source === "ai"
-    ? tr("AI 语义批改", "AI SEMANTIC REVIEW")
-    : tr("本地匹配 · 仅供参考", "LOCAL MATCH · FOR REFERENCE");
+  const sourceLabel = tr("AI 语义批改", "AI SEMANTIC REVIEW");
   const selectedLabels = posLabelList(attempt.selectedPos || []);
   const strengths = attempt.strengths?.length ? attempt.strengths : [];
   const gaps = attempt.gaps?.length ? attempt.gaps : [];
@@ -139,26 +178,16 @@ function ResultPanel({ word, attempt, currentIndex, total, onNext, onGoInsights 
               {masteryBandLabel(attempt.overall)}
             </h2>
             <p className="mt-2 max-w-xl text-[12px] font-light leading-relaxed text-white/60">
-              {attempt.source === "ai"
-                ? tr("已对照词卡完成语义批改。分数是下一步行动的路标，不是终点。", "The card has been reviewed semantically. The score is a signpost for your next move, not a finish line.")
-                : tr("尚未连接 AI，本次使用本地关键词匹配。同义表达可能被漏判，建议在设置中接入 DeepSeek 复核。", "AI is not connected, so this attempt used local keyword matching. Paraphrases can be missed; connect DeepSeek in Settings for a closer review.")}
+              {tr("已对照词卡原始答案逐项完成 AI 批改。分数是下一步行动的路标，不是终点。", "AI reviewed each field against the original card answers. The score is a signpost for your next move, not a finish line.")}
             </p>
-            {attempt.source === "ai" && (
-              <p className="mt-2 max-w-xl text-[10px] leading-relaxed text-white/40">
-                {tr("语义优先评分：意思覆盖 70% + 准确度 25% + 表达 5%。只要核心意思相近就会得到高分，语法和拼写只作轻微扣分；与参考答案完全一致直接 100 分。", "Meaning-first scoring: 70% meaning coverage + 25% precision + 5% expression. Close semantic matches earn high marks; grammar and spelling only cause a small deduction. Exact matches receive 100.")}
-              </p>
-            )}
-            {attempt.aiError && (
-              <p className="mt-2 inline-flex max-w-full items-start gap-1.5 rounded-[0.8rem] border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[10px] leading-relaxed text-white/60">
-                <Icon name="alert" className="mt-[1px] h-3 w-3 shrink-0" />
-                <span className="break-words">{tr("AI 未能完成复核：", "AI could not complete the review: ")}{attempt.aiError}</span>
-              </p>
-            )}
+            <p className="mt-2 max-w-xl text-[10px] leading-relaxed text-white/40">
+              {tr("参考答案严格取自词卡原始内容；从 Excel 导入的词卡标记为「Excel 原文」，AI 不改写、不补充。宽松评分：语义覆盖 75% + 准确度 20% + 表达 5%；核心意思相近即高分，语法拼写仅轻微影响。", "References come strictly from the original card content; Excel imports are marked 'Excel source'. AI never rewrites or supplements them. Lenient scoring: 75% meaning coverage + 20% precision + 5% expression. Close core meanings score high; grammar/spelling only has a small effect.")}
+            </p>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <span className="liquid-glass rounded-full px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] text-white/65">
-            {attempt.model || tr("本地引擎", "local engine")}
+            {attempt.model || "DeepSeek"}
           </span>
           <button type="button" onClick={onGoInsights} className={`${BTN_GLASS} px-4 py-2 text-xs`}>
             <Icon name="chart" className="h-4 w-4" />
@@ -173,18 +202,23 @@ function ResultPanel({ word, attempt, currentIndex, total, onNext, onGoInsights 
           result={attempt.feedback?.pos}
           yourAnswer={selectedLabels}
           reference={posLabelList(word.pos)}
+          referenceSource={word.referenceSource}
         />
         <FieldScoreCard
           field="zh"
           result={attempt.feedback?.zh}
           yourAnswer={attempt.zhAnswer}
           reference={word.zh}
+          referenceSource={word.referenceSource}
+          items={attempt.feedback?.zh?.items || []}
         />
         <FieldScoreCard
           field="en"
           result={attempt.feedback?.en}
           yourAnswer={attempt.enAnswer}
           reference={word.en}
+          referenceSource={word.referenceSource}
+          items={attempt.feedback?.en?.items || []}
         />
       </div>
 
@@ -426,12 +460,14 @@ function StudyPage({
   const [zh, setZh] = useState("");
   const [en, setEn] = useState("");
   const [grading, setGrading] = useState(false);
+  const [gradeError, setGradeError] = useState("");
 
   useEffect(() => {
     setSelectedPos([]);
     setZh("");
     setEn("");
     setGrading(false);
+    setGradeError("");
   }, [currentWord?.id, session.index]);
 
   const togglePos = useCallback((id) => {
@@ -444,64 +480,62 @@ function StudyPage({
   const handleSubmit = async (event) => {
     event?.preventDefault?.();
     if (!currentWord || grading || result) return;
+    if (!aiConfigured) {
+      toast(tr("所有评分都由 AI 完成。请先在设置中接入 DeepSeek。", "All scoring is done by AI. Connect DeepSeek in Settings first."), "warning");
+      onOpenSettings();
+      return;
+    }
     if (!hasAnswer) {
       toast(tr("至少选择词性或填写一项释义，再提交本轮。", "Select a part of speech or write at least one meaning before submitting."), "info");
       return;
     }
 
     setGrading(true);
+    setGradeError("");
     const answers = {
       selectedPos,
       zh: zh.trim(),
       en: en.trim(),
     };
-    const local = localEvaluate(currentWord, answers);
-    let evaluation = local;
-    let aiError = null;
 
-    if (aiConfigured) {
-      try {
-        const raw = await getAiEvaluation(currentWord, answers, settings);
-        evaluation = mergeAiEvaluation(raw, local, currentWord, answers, settings.model);
-      } catch (error) {
-        aiError = error.message;
-      }
+    try {
+      const raw = await getAiEvaluation(currentWord, answers, settings);
+      const evaluation = mergeAiEvaluation(raw, currentWord, answers, settings.model);
+      const attempt = {
+        id: uid("attempt"),
+        wordId: currentWord.id,
+        word: currentWord.word,
+        createdAt: Date.now(),
+        selectedPos: answers.selectedPos,
+        zhAnswer: answers.zh,
+        enAnswer: answers.en,
+        scores: {
+          pos: evaluation.pos.score,
+          zh: evaluation.zh.score,
+          en: evaluation.en.score,
+        },
+        overall: evaluation.overall,
+        feedback: {
+          pos: evaluation.pos,
+          zh: evaluation.zh,
+          en: evaluation.en,
+        },
+        correct: {
+          pos: evaluation.pos.correct,
+          zh: evaluation.zh.correct,
+          en: evaluation.en.correct,
+        },
+        strengths: evaluation.strengths,
+        gaps: evaluation.gaps,
+        source: "ai",
+        model: evaluation.model,
+      };
+      onCompleteAttempt(attempt);
+    } catch (error) {
+      setGradeError(error.message || tr("AI 批改失败，请重试。", "AI review failed. Try again."));
+    } finally {
+      setGrading(false);
     }
-
-    const attempt = {
-      id: uid("attempt"),
-      wordId: currentWord.id,
-      word: currentWord.word,
-      createdAt: Date.now(),
-      selectedPos: answers.selectedPos,
-      zhAnswer: answers.zh,
-      enAnswer: answers.en,
-      scores: {
-        pos: evaluation.pos.score,
-        zh: evaluation.zh.score,
-        en: evaluation.en.score,
-      },
-      overall: evaluation.overall,
-      feedback: {
-        pos: evaluation.pos,
-        zh: evaluation.zh,
-        en: evaluation.en,
-      },
-      correct: {
-        pos: local.pos.correct,
-        zh: evaluation.zh.correct,
-        en: evaluation.en.correct,
-      },
-      strengths: evaluation.strengths,
-      gaps: evaluation.gaps,
-      source: evaluation.source,
-      model: evaluation.model,
-      aiError,
-    };
-
-    onCompleteAttempt(attempt);
-    setGrading(false);
-    if (aiError) toast(tr(`AI 复核未完成，已切换为本地判分：${aiError}`, `AI review did not finish, so local marking was used: ${aiError}`), "warning");
   };
 
   useEffect(() => {
@@ -561,7 +595,7 @@ function StudyPage({
           <div className="flex items-center gap-2">
             <span className="liquid-glass inline-flex items-center gap-2 rounded-full px-3.5 py-2.5 text-[10px] uppercase tracking-[0.14em] text-white/65">
               <span className={`status-dot ${aiConfigured ? "" : "is-idle"}`} aria-hidden="true" />
-              {aiConfigured ? tr("DeepSeek 已连接", "DeepSeek uplink") : tr("本地判分", "Local marking")}
+              {aiConfigured ? tr("DeepSeek 已连接", "DeepSeek uplink") : tr("AI 未连接", "AI not connected")}
             </span>
             {!aiConfigured && (
               <button type="button" onClick={onOpenSettings} className="rounded-full px-2 py-2 text-[11px] text-white/60 underline decoration-white/20 underline-offset-4 hover:text-white">
@@ -688,13 +722,24 @@ function StudyPage({
                           </div>
                         </div>
 
+                        {gradeError && (
+                          <div className="mt-5 flex flex-col gap-2 rounded-[1rem] border border-white/20 bg-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
+                            <p className="flex items-start gap-2 text-[11px] leading-relaxed text-white/65">
+                              <Icon name="alert" className="mt-[1px] h-3.5 w-3.5 shrink-0" />
+                              {gradeError}
+                            </p>
+                            <button type="button" onClick={() => { setGradeError(""); onOpenSettings(); }} className="shrink-0 rounded-full border border-white/20 px-3 py-1.5 text-[10px] text-white/70 hover:bg-white/10 hover:text-white">
+                              {tr("检查 AI 设置", "Check AI settings")}
+                            </button>
+                          </div>
+                        )}
                         <div className="mt-6 flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-start gap-2 text-[10px] leading-relaxed text-white/40">
                             <Icon name={aiConfigured ? "sparkles" : "alert"} className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                             <span className="max-w-md">
                               {aiConfigured
-                                ? tr("DeepSeek 只分析你提交的答案，不会替你作答。Ctrl / ⌘ + Enter 提交。", "DeepSeek only reviews what you submit; it will not answer for you. Press Ctrl / ⌘ + Enter to submit.")
-                                : tr("当前使用本地关键词判分，同义表达可能漏判。连接 DeepSeek 后可获得语义批改。", "Local keyword matching is active; paraphrases can be missed. Connect DeepSeek for semantic review.")}
+                                ? tr("所有评分均由 AI 完成；参考答案严格来自 Excel，AI 不会生成或补充。语义相近会按宽松标准给高分。", "All scoring is done by AI. References come strictly from your Excel file; AI never generates or supplements them. Close meanings receive lenient high scores.")
+                                : tr("当前未连接 AI，无法评分。所有评分必须由 AI 完成，请先在设置中接入 DeepSeek。", "AI is not connected, so grading is unavailable. All scoring must be done by AI; connect DeepSeek in Settings first.")}
                             </span>
                           </div>
                           <button type="submit" disabled={grading || !hasAnswer} className={`${BTN_PRIMARY} min-w-[148px]`}>
@@ -705,7 +750,7 @@ function StudyPage({
                               </>
                             ) : (
                               <>
-                                {aiConfigured ? tr("提交 AI 批改", "Submit for AI review") : tr("提交本地判分", "Submit for local marking")}
+                                {aiConfigured ? tr("提交 AI 批改", "Submit for AI review") : tr("先接入 AI", "Connect AI first")}
                                 <Icon name="arrowUpRight" className="h-4 w-4" />
                               </>
                             )}
@@ -741,7 +786,7 @@ function StudyPage({
         {!finished && (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 px-1">
             <p className="text-[10px] uppercase tracking-[0.16em] text-white/30">
-              {settings.apiKey ? tr("AI 批改已启用", "AI review active") : tr("本地引擎已启用", "Local engine active")} · {tr("数据保存在此浏览器", "Data stays in this browser")}
+              {settings.apiKey ? tr("AI 批改已启用", "AI review active") : tr("需要接入 AI 才能评分", "AI required for grading")} · {tr("数据保存在此浏览器", "Data stays in this browser")}
             </p>
             <button type="button" onClick={onImport} className="inline-flex items-center gap-1.5 text-[11px] text-white/40 transition-colors hover:text-white">
               <Icon name="plus" className="h-3.5 w-3.5" />
