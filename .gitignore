@@ -1,0 +1,13 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+node_modules/
+*.pem
+
+# Local test artifacts
+test-import.xlsx
